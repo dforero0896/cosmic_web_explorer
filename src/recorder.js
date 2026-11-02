@@ -352,21 +352,23 @@ window.SimulationRecorder = class SimulationRecorder {
 
         // Link text bottom-right with rounded box
         const linkText = 'nicosmo.github.io/cosmic_web_explorer';
-        const linkFontSize = 22;
+        // Watermark size follows the recording resolution: ~1.4% of the
+        // shorter side, clamped, instead of a fixed 22px.
+        const linkFontSize = Math.max(10, Math.min(16, Math.round(Math.min(w, h) * 0.014)));
         ctx.font = `300 ${linkFontSize}px Inter, sans-serif`;
         ctx.textAlign = 'right';
         ctx.textBaseline = 'middle';
 
         const linkMetrics = ctx.measureText(linkText);
         const linkWidth = linkMetrics.width;
-        const linkPadX = 12;
-        const linkPadY = 8;
+        const linkPadX = Math.round(linkFontSize * 0.55);
+        const linkPadY = Math.round(linkFontSize * 0.36);
         const linkBoxW = linkWidth + linkPadX * 2;
         const linkBoxH = linkFontSize + linkPadY * 2;
 
         const linkBoxX = w - linkBoxW - 10;
         const linkBoxY = h - linkBoxH - 10;
-        const linkRadius = 8;
+        const linkRadius = Math.round(linkFontSize * 0.36);
 
         // Draw semi-transparent box (0.75 alpha)
         ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';

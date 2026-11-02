@@ -55,13 +55,21 @@ function computeGridParams(N, SIM_W, SIM_H, cellSearchCount) {
 
 /**
  * Apply sculpting force — attract particles toward mouse position.
+ * When alptDisp is supplied it replaces the LPT base displacement.
  */
-function applySculpting(mx, my, range, N, initialTracers, tracerForces, tracerForces2, offsets, dispScale, disp2Scale, SIM_W, SIM_H) {
+function applySculpting(mx, my, range, N, initialTracers, tracerForces, tracerForces2, offsets, dispScale, disp2Scale, SIM_W, SIM_H, alptDisp) {
     const rangeSq = range * range;
+    const alptOn = !!alptDisp && alptDisp.length >= N * 2;
     for (let i = 0; i < N; i++) {
         const g = initialTracers[i];
-        const bx = g.qx + tracerForces[i * 2] * dispScale + tracerForces2[i * 2] * disp2Scale;
-        const by = g.qy + tracerForces[i * 2 + 1] * dispScale + tracerForces2[i * 2 + 1] * disp2Scale;
+        let bx, by;
+        if (alptOn) {
+            bx = g.qx + alptDisp[i * 2];
+            by = g.qy + alptDisp[i * 2 + 1];
+        } else {
+            bx = g.qx + tracerForces[i * 2] * dispScale + tracerForces2[i * 2] * disp2Scale;
+            by = g.qy + tracerForces[i * 2 + 1] * dispScale + tracerForces2[i * 2 + 1] * disp2Scale;
+        }
         let px = bx + offsets[i * 2];
         let py = by + offsets[i * 2 + 1];
         px = ((px % SIM_W) + SIM_W) % SIM_W;
@@ -92,32 +100,43 @@ function applySculpting(mx, my, range, N, initialTracers, tracerForces, tracerFo
  * Adaptive growth damping: D_eff(i) = D_1(t) / (1 + alpha * crossingAccum(i))
  * Replaces hard-freeze adhesion with soft damping proportional to
  * accumulated shell-crossing count. 2LPT D_2 is re-derived from D_eff.
+ *
+ * When alptDisp is supplied (ALPT mode) it replaces the 1LPT+2LPT base
+ * displacement outright; it already carries the D(t) scaling and the
+ * spherical-collapse term, so the adaptive damping is bypassed.
  */
 function updatePositionsAndBuildGrid(
     N, initialTracers, tracerForces, tracerForces2, offsets, crossingAccum,
     dispScale, growthD, rawScale, densityFactor,
     SIM_W, SIM_H, physX, physY, cellSize, gridW, gridH, head, next,
-    useAdhesion
+    useAdhesion, alptDisp
 ) {
     head.fill(-1);
     const scaleFactor = 120 * Math.min(1.0, rawScale) * densityFactor;
     const adhesionOn = useAdhesion !== false;  // default true if not provided
+    const alptOn = !!alptDisp && alptDisp.length >= N * 2;
     for (let i = 0; i < N; i++) {
         const g = initialTracers[i];
 
-        // --- ADAPTIVE GROWTH DAMPING ---
-        const effectiveD1 = adhesionOn
-            ? growthD / (1.0 + ADHESION_ALPHA * crossingAccum[i])
-            : growthD;
+        let bx, by;
+        if (alptOn) {
+            bx = g.qx + alptDisp[i * 2];
+            by = g.qy + alptDisp[i * 2 + 1];
+        } else {
+            // --- ADAPTIVE GROWTH DAMPING ---
+            const effectiveD1 = adhesionOn
+                ? growthD / (1.0 + ADHESION_ALPHA * crossingAccum[i])
+                : growthD;
 
-        const particleDispScale = effectiveD1 * scaleFactor;
-        // 2LPT: D_2 = -3/7 * D_1^2, re-derived from effective D_1
-        const particleDisp2Scale = (-3 / 7) * effectiveD1 * particleDispScale;
+            const particleDispScale = effectiveD1 * scaleFactor;
+            // 2LPT: D_2 = -3/7 * D_1^2, re-derived from effective D_1
+            const particleDisp2Scale = (-3 / 7) * effectiveD1 * particleDispScale;
 
-        const bx = g.qx + tracerForces[i * 2] * particleDispScale
-                        + tracerForces2[i * 2] * particleDisp2Scale;
-        const by = g.qy + tracerForces[i * 2 + 1] * particleDispScale
-                        + tracerForces2[i * 2 + 1] * particleDisp2Scale;
+            bx = g.qx + tracerForces[i * 2] * particleDispScale
+                            + tracerForces2[i * 2] * particleDisp2Scale;
+            by = g.qy + tracerForces[i * 2 + 1] * particleDispScale
+                            + tracerForces2[i * 2 + 1] * particleDisp2Scale;
+        }
         let px = bx + offsets[i * 2];
         let py = by + offsets[i * 2 + 1];
         px = ((px % SIM_W) + SIM_W) % SIM_W;

@@ -35,6 +35,7 @@ https://github.com/nicosmo/cosmic_web_explorer
     <script src="src/color-luts.js"></script>
     <script src="src/bao-forces.js"></script>
     <script src="src/pert2lpt.js"></script>
+    <script src="src/pertalpt.js"></script>
     <script src="src/transfer-function.js"></script>
     <script src="src/sim-physics.js"></script>
     <script src="src/redshift-space.js"></script>
@@ -524,6 +525,16 @@ https://github.com/nicosmo/cosmic_web_explorer
             const [cosmicTime, setCosmicTime] = useState(cosmologyLUT.minTime);
             const [showTracers, setShowTracers] = useState(true);
             const [showGas, setShowGas] = useState(false);
+            const [multiColormap, setMultiColormap] = useState(false);
+            const [densityColormap, setDensityColormap] = useState('classic');
+            const [gasColormap, setGasColormap] = useState('thermal');
+            const [alptEnabled, setAlptEnabled] = useState(false);
+            const [alptSmoothing, setAlptSmoothing] = useState(4);
+            const [alptTable, setAlptTable] = useState(null);
+            const [alptTableB, setAlptTableB] = useState(null);
+            const [alptComputing, setAlptComputing] = useState(false);
+            const [alptLocalStep, setAlptLocalStep] = useState(true);
+            const [alptStepLen, setAlptStepLen] = useState(1.5);
             const [showDensity, setShowDensity] = useState(false);
             const [showInitialOverlay, setShowInitialOverlay] = useState(false);
             const [rulerActive, setRulerActive] = useState(false);
@@ -1198,7 +1209,9 @@ https://github.com/nicosmo/cosmic_web_explorer
 
             const tracerForces2 = useMemo(() => {
                 const f2 = compute2LPTDisplacement(tracerForces, initialTracers, tracersPerPanel, SIM_W, SIM_H);
-                const targets = tracerForces._cosmoTextTargets;
+                // ALPT recombines the 2LPT field with a collapse term, so the
+                // exact text-imprint inversion of 2LPT no longer applies.
+                const targets = alptEnabled ? null : tracerForces._cosmoTextTargets;
 
                 if (targets) {
                     // Calculate the exact physics scales at z=0
@@ -1223,12 +1236,12 @@ https://github.com/nicosmo/cosmic_web_explorer
                     }
                 }
                 return f2;
-            }, [tracerForces, initialTracers, tracersPerPanel, SIM_W, SIM_H, omegaM]);
+            }, [tracerForces, initialTracers, tracersPerPanel, SIM_W, SIM_H, omegaM, alptEnabled]);
 
             const tracerForces2B = useMemo(() => {
                 if (!splitScreen) return tracerForces2;
                 const f2 = compute2LPTDisplacement(tracerForcesB, initialTracers, tracersPerPanel, SIM_W, SIM_H);
-                const targets = tracerForcesB._cosmoTextTargets;
+                const targets = alptEnabled ? null : tracerForcesB._cosmoTextTargets;
 
                 if (targets) {
                     const densityFactor = Math.pow(omegaMB / 0.3, 0.6);
@@ -1250,7 +1263,62 @@ https://github.com/nicosmo/cosmic_web_explorer
                     }
                 }
                 return f2;
-            }, [splitScreen, tracerForcesB, initialTracers, tracersPerPanel, SIM_W, SIM_H, tracerForces2, omegaMB]);
+            }, [splitScreen, tracerForcesB, initialTracers, tracersPerPanel, SIM_W, SIM_H, tracerForces2, omegaMB, alptEnabled]);
+
+            // Build the ALPT displacement table lazily. The spherical-collapse
+            // term is nonlinear in D(t), so we precompute fields at a handful of
+            // growth factors and interpolate per particle in the render loop.
+            useEffect(() => {
+                if (!alptEnabled) {
+                    setAlptTable(null);
+                    setAlptTableB(null);
+                    setAlptComputing(false);
+                    return;
+                }
+                setAlptComputing(true);
+                let cancelled = false;
+                const timer = setTimeout(() => {
+                    let table = null;
+                    let tableB = null;
+                    try {
+                        const rSpx = Math.max(1, (alptSmoothing / PLANCK_H) * pxPerMpc);
+                        const alptAmp = (df) => DISP_SCALE_FACTOR * Math.min(1, RAW_SCALE_UNIFIED) * df;
+                        // Step length is expressed as a multiple of the mean
+                        // particle spacing; convert it to pixels here.
+                        const spacingPx = Math.sqrt((SIM_W * SIM_H) / Math.max(1, tracersPerPanel));
+                        const stepPx = alptStepLen * spacingPx;
+                        table = buildALPTTable({
+                            tracerForces, tracerForces2, initialTracers,
+                            N: tracersPerPanel, simW: SIM_W, simH: SIM_H,
+                            dispNorm: alptAmp(Math.pow(omegaM / 0.3, 0.6)),
+                            rSpx,
+                            localStep: alptLocalStep,
+                            localStepLen: stepPx
+                        });
+                        if (splitScreen) {
+                            tableB = buildALPTTable({
+                                tracerForces: tracerForcesB, tracerForces2: tracerForces2B,
+                                initialTracers, N: tracersPerPanel, simW: SIM_W, simH: SIM_H,
+                                dispNorm: alptAmp(Math.pow(omegaMB / 0.3, 0.6)),
+                                rSpx,
+                                localStep: alptLocalStep,
+                                localStepLen: stepPx
+                            });
+                        }
+                    } catch (err) {
+                        console.error('ALPT table build failed:', err);
+                    }
+                    if (!cancelled) {
+                        setAlptTable(table);
+                        setAlptTableB(tableB);
+                        setAlptComputing(false);
+                    }
+                }, 120);
+                return () => {
+                    cancelled = true;
+                    clearTimeout(timer);
+                };
+            }, [alptEnabled, alptSmoothing, alptLocalStep, alptStepLen, tracerForces, tracerForces2, tracerForcesB, tracerForces2B, initialTracers, tracersPerPanel, SIM_W, SIM_H, pxPerMpc, omegaM, omegaMB, splitScreen]);
 
             const resetPhysics = () => {
                 localDynamics.current.offsets.fill(0);
@@ -1447,21 +1515,24 @@ https://github.com/nicosmo/cosmic_web_explorer
                     // Link text bottom-right
                     // Link text bottom-right with rounded box
                     const linkText = 'nicosmo.github.io/cosmic_web_explorer';
-                    const linkFontSize = 22;
+                    // Watermark size follows the export resolution: ~1.4% of the
+                    // shorter side, clamped, instead of a fixed 22px that looked
+                    // oversized on small exports.
+                    const linkFontSize = Math.max(10, Math.min(16, Math.round(Math.min(tempCanvas.width, tempCanvas.height) * 0.014)));
                     tCtx.font = `300 ${linkFontSize}px Inter, sans-serif`;
                     tCtx.textAlign = 'right';
                     tCtx.textBaseline = 'middle';
 
                     const linkMetrics = tCtx.measureText(linkText);
                     const linkWidth = linkMetrics.width;
-                    const linkPadX = 12;
-                    const linkPadY = 8;
+                    const linkPadX = Math.round(linkFontSize * 0.55);
+                    const linkPadY = Math.round(linkFontSize * 0.36);
                     const linkBoxW = linkWidth + linkPadX * 2;
                     const linkBoxH = linkFontSize + linkPadY * 2;
 
                     const linkBoxX = tempCanvas.width - linkBoxW - 20;
                     const linkBoxY = tempCanvas.height - linkBoxH - 20;
-                    const linkRadius = 8;
+                    const linkRadius = Math.round(linkFontSize * 0.36);
 
                     // Draw semi-transparent box
                     tCtx.fillStyle = 'rgba(0, 0, 0, 0.6)';
@@ -2050,6 +2121,10 @@ https://github.com/nicosmo/cosmic_web_explorer
                         tracerForcesB,
                         tracerForces2,
                         tracerForces2B,
+                        alptEnabled,
+                        alptTable,
+                        alptTableB,
+                        alptLocalStep,
                         BAO_RADIUS_PX,
                         BAO_RADIUS_PX_B,
                         BAO_RADIUS_MPC,
@@ -2177,6 +2252,9 @@ https://github.com/nicosmo/cosmic_web_explorer
 
                         // Density coloring always uses 3x3 (9 cells) for consistency
                         const meanDensity = colorMeanDensity;
+                        // Select the active palettes (defaults preserve the original look)
+                        const activeDensityLUT = getDensityLUT(multiColormap ? densityColormap : 'classic');
+                        const activeGasLUT = getGasLUT(multiColormap ? gasColormap : 'thermal');
 
                         const simW = SIM_W | 0;
                         const simH = SIM_H | 0;
@@ -2229,10 +2307,10 @@ https://github.com/nicosmo/cosmic_web_explorer
                                 let colIdx = (Math.pow(ratio, 0.75) * 100) | 0;
                                 if (colIdx >= COLOR_LUT_SIZE) colIdx = COLOR_LUT_SIZE - 1;
 
-                                // Color (Gas LUT)
-                                wbColors[i*4] = GAS_LUT_RGB[colIdx*3];     // R
-                                wbColors[i*4+1] = GAS_LUT_RGB[colIdx*3+1]; // G
-                                wbColors[i*4+2] = GAS_LUT_RGB[colIdx*3+2]; // B
+                                // Color (active gas colormap)
+                                wbColors[i*4] = activeGasLUT[colIdx*3];     // R
+                                wbColors[i*4+1] = activeGasLUT[colIdx*3+1]; // G
+                                wbColors[i*4+2] = activeGasLUT[colIdx*3+2]; // B
 
                                 // Opacity logic moved to shader/blend, but we can pass alpha
                                 const opacity = Math.min(0.8, 0.15 / (ratio + 0.1) + (ratio * 0.1));
@@ -2246,9 +2324,9 @@ https://github.com/nicosmo/cosmic_web_explorer
                                 let colIdx = (Math.pow(ratio, 0.75) * 100) | 0;
                                 if (colIdx >= COLOR_LUT_SIZE) colIdx = COLOR_LUT_SIZE - 1;
 
-                                wbColors[i*4] = DENSITY_LUT_RGB[colIdx*3];
-                                wbColors[i*4+1] = DENSITY_LUT_RGB[colIdx*3+1];
-                                wbColors[i*4+2] = DENSITY_LUT_RGB[colIdx*3+2];
+                                wbColors[i*4] = activeDensityLUT[colIdx*3];
+                                wbColors[i*4+1] = activeDensityLUT[colIdx*3+1];
+                                wbColors[i*4+2] = activeDensityLUT[colIdx*3+2];
                                 wbColors[i*4+3] = 1.0;
                                 wbSizes[i] = 1.0;
                             }
@@ -2433,7 +2511,14 @@ https://github.com/nicosmo/cosmic_web_explorer
                     cancelled = true;
                     cancelAnimationFrame(animationFrameId);
                 };
-            }, [isPlaying, simDeltaT, omegaM, omegaL, w0, wa, showTracers, showGas, showDensity, showInitialOverlay, rulerActive, sculptActive, trailPercentage, trailMode, initialTracers, centers, tracerForces, tracerForcesB, tracerForces2, tracerForces2B, canvasSize, enableLocalGravity, numCircles, boxSizeMpc, BAO_RADIUS_MPC, BAO_RADIUS_MPC_B, BAO_RADIUS_PX_B, tracersPerPanel, isSidebarCollapsed, renderTrigger, cosmologyLUT, showCorrelation, showVoidProfile, showDensityPDF, showVoronoi, showVoids, voidThreshold, minVoidRadius, voidCenterMode, profileMode, splitScreen, omegaMB, omegaLB, w0B, waB, cosmologyLUTB, cosmoMode, cosmoModeB, initMode, spaceMode, rsdLos, rsdAmplitude, rsdAmplitudeSettled]);
+            }, [isPlaying, simDeltaT, omegaM, omegaL, w0, wa, showTracers, showGas, showDensity, showInitialOverlay, rulerActive, sculptActive, trailPercentage, trailMode, initialTracers, centers, tracerForces, tracerForcesB, tracerForces2, tracerForces2B, canvasSize, enableLocalGravity, numCircles, boxSizeMpc, BAO_RADIUS_MPC, BAO_RADIUS_MPC_B, BAO_RADIUS_PX_B, tracersPerPanel, isSidebarCollapsed, renderTrigger, cosmologyLUT, showCorrelation, showVoidProfile, showDensityPDF, showVoronoi, showVoids, voidThreshold, minVoidRadius, voidCenterMode, profileMode, splitScreen, omegaMB, omegaLB, w0B, waB, cosmologyLUTB, cosmoMode, cosmoModeB, initMode, spaceMode, rsdLos, rsdAmplitude, rsdAmplitudeSettled, multiColormap, densityColormap, gasColormap, alptEnabled, alptTable, alptTableB, alptLocalStep]);
+
+            // Localized names for the two original palettes; the rest are proper nouns.
+            const colormapLabel = (name) => {
+                if (name === 'classic') return i18n[lang].cmClassic;
+                if (name === 'thermal') return i18n[lang].cmThermal;
+                return getColormapLabel(name);
+            };
 
             return (
                 <div id="app-container" className={`${rulerActive ? 'cursor-crosshair' : ''} ${sculptActive ? 'cursor-grab' : ''}`}
@@ -3176,6 +3261,140 @@ https://github.com/nicosmo/cosmic_web_explorer
                                                     <Wind size={14}/> {i18n[lang].thermal}
                                                 </button>
                                             </TooltipWrapper>
+                                        </div>
+
+                                        <div className="mt-2 pt-2 border-t border-white/5 space-y-2">
+                                            <div className="flex items-center justify-between">
+                                                <TooltipWrapper text={i18n[lang].ttMultiColormap}>
+                                                    <label htmlFor="multi-colormap-toggle" className="text-xs font-bold text-slate-400 uppercase tracking-widest cursor-pointer">{i18n[lang].colormaps}</label>
+                                                </TooltipWrapper>
+                                                <label className="toggle-switch scale-75 origin-right">
+                                                    <input
+                                                        id="multi-colormap-toggle"
+                                                        type="checkbox"
+                                                        checked={multiColormap}
+                                                        onChange={(e) => setMultiColormap(e.target.checked)}
+                                                        aria-label={i18n[lang].multiColormap}
+                                                    />
+                                                    <span className="slider"></span>
+                                                </label>
+                                            </div>
+                                            {multiColormap && (
+                                                <div className="space-y-2 animate-in fade-in duration-200">
+                                                    <TooltipWrapper text={i18n[lang].ttDensityColormap}>
+                                                        <div className="space-y-1 w-full">
+                                                            <div className="flex justify-between text-xs">
+                                                                <span className="text-slate-400">{i18n[lang].densityColormap}</span>
+                                                                <span className="text-slate-200">{colormapLabel(densityColormap)}</span>
+                                                            </div>
+                                                            <select
+                                                                aria-label={i18n[lang].densityColormap}
+                                                                value={densityColormap}
+                                                                onChange={(e) => setDensityColormap(e.target.value)}
+                                                                className="w-full text-xs bg-slate-800 text-slate-200 border border-slate-700 rounded px-2 py-1.5 focus:outline-none focus:border-blue-500"
+                                                            >
+                                                                {getColormapNames('density').map((name) => (
+                                                                    <option key={name} value={name}>{colormapLabel(name)}</option>
+                                                                ))}
+                                                            </select>
+                                                            <div className="h-1.5 w-full rounded" style={{ background: getColormapGradientCSS(densityColormap) }} />
+                                                        </div>
+                                                    </TooltipWrapper>
+                                                    <TooltipWrapper text={i18n[lang].ttGasColormap}>
+                                                        <div className="space-y-1 w-full">
+                                                            <div className="flex justify-between text-xs">
+                                                                <span className="text-slate-400">{i18n[lang].gasColormap}</span>
+                                                                <span className="text-slate-200">{colormapLabel(gasColormap)}</span>
+                                                            </div>
+                                                            <select
+                                                                aria-label={i18n[lang].gasColormap}
+                                                                value={gasColormap}
+                                                                onChange={(e) => setGasColormap(e.target.value)}
+                                                                className="w-full text-xs bg-slate-800 text-slate-200 border border-slate-700 rounded px-2 py-1.5 focus:outline-none focus:border-blue-500"
+                                                            >
+                                                                {getColormapNames('gas').map((name) => (
+                                                                    <option key={name} value={name}>{colormapLabel(name)}</option>
+                                                                ))}
+                                                            </select>
+                                                            <div className="h-1.5 w-full rounded" style={{ background: getColormapGradientCSS(gasColormap) }} />
+                                                        </div>
+                                                    </TooltipWrapper>
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        <div className="mt-2 pt-2 border-t border-white/5 space-y-2">
+                                            <div className="flex items-center justify-between">
+                                                <TooltipWrapper text={i18n[lang].ttAlpt}>
+                                                    <label htmlFor="alpt-toggle" className="text-xs font-bold text-slate-400 uppercase tracking-widest cursor-pointer">{i18n[lang].alpt}</label>
+                                                </TooltipWrapper>
+                                                <label className="toggle-switch scale-75 origin-right">
+                                                    <input
+                                                        id="alpt-toggle"
+                                                        type="checkbox"
+                                                        checked={alptEnabled}
+                                                        onChange={(e) => setAlptEnabled(e.target.checked)}
+                                                        aria-label={i18n[lang].alpt}
+                                                    />
+                                                    <span className="slider"></span>
+                                                </label>
+                                            </div>
+                                            <p className="text-[10px] text-slate-500 leading-tight">{i18n[lang].alptHint}</p>
+                                            {alptEnabled && (
+                                                <div className="space-y-1 animate-in fade-in duration-200">
+                                                    <div className="flex justify-between text-xs">
+                                                        <TooltipWrapper text={i18n[lang].ttAlptSmoothing}>
+                                                            <span className="text-slate-400">{i18n[lang].alptSmoothing}</span>
+                                                        </TooltipWrapper>
+                                                        <span className="text-slate-200">{alptSmoothing} h⁻¹Mpc</span>
+                                                    </div>
+                                                    <input
+                                                        aria-label={i18n[lang].alptSmoothing}
+                                                        type="range" min="1" max="10" step="0.5"
+                                                        value={alptSmoothing}
+                                                        onChange={(e) => setAlptSmoothing(parseFloat(e.target.value))}
+                                                        className="w-full accent-emerald-500"
+                                                    />
+                                                    <div className="flex justify-between text-[9px] text-slate-500 font-mono">
+                                                        <span>1</span>
+                                                        <span>{alptComputing ? i18n[lang].alptBuilding : i18n[lang].alptReady}</span>
+                                                        <span>10</span>
+                                                    </div>
+                                                    <div className="flex items-center justify-between pt-1">
+                                                        <TooltipWrapper text={i18n[lang].ttAlptLocalStep}>
+                                                            <label htmlFor="alpt-local-step-toggle" className="text-[11px] text-slate-400 cursor-pointer">{i18n[lang].alptLocalStep}</label>
+                                                        </TooltipWrapper>
+                                                        <label className="toggle-switch scale-[0.6] origin-right">
+                                                            <input
+                                                                id="alpt-local-step-toggle"
+                                                                type="checkbox"
+                                                                checked={alptLocalStep}
+                                                                onChange={(e) => setAlptLocalStep(e.target.checked)}
+                                                                aria-label={i18n[lang].alptLocalStep}
+                                                            />
+                                                            <span className="slider"></span>
+                                                        </label>
+                                                    </div>
+                                                    <p className="text-[10px] text-slate-500 leading-tight">{i18n[lang].alptLocalStepHint}</p>
+                                                    {alptLocalStep && (
+                                                        <div className="space-y-1">
+                                                            <div className="flex justify-between text-xs">
+                                                                <TooltipWrapper text={i18n[lang].ttAlptStepLen}>
+                                                                    <span className="text-slate-400">{i18n[lang].alptStepLen}</span>
+                                                                </TooltipWrapper>
+                                                                <span className="text-slate-200">{alptStepLen.toFixed(2)} × d̄</span>
+                                                            </div>
+                                                            <input
+                                                                aria-label={i18n[lang].alptStepLen}
+                                                                type="range" min="0.25" max="3" step="0.25"
+                                                                value={alptStepLen}
+                                                                onChange={(e) => setAlptStepLen(parseFloat(e.target.value))}
+                                                                className="w-full accent-emerald-500"
+                                                            />
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
                                         </div>
 
                                         <div className="space-y-1 mt-2">

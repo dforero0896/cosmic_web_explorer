@@ -292,3 +292,7 @@ function compute2LPTDisplacement(tracerForces, initialTracers, N, simW, simH) {
 
     return tracerForces2;
 }
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { compute2LPTDisplacement, fft1d, fft2d };
+}

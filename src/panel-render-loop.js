@@ -62,6 +62,10 @@ async function processPanelPhysicsAndRSD(opts) {
         tracerForcesB,
         tracerForces2,
         tracerForces2B,
+        alptEnabled,
+        alptTable,
+        alptTableB,
+        alptLocalStep,
         BAO_RADIUS_PX,
         BAO_RADIUS_PX_B,
         BAO_RADIUS_MPC,
@@ -135,6 +139,7 @@ async function processPanelPhysicsAndRSD(opts) {
     const pLastCalcParamsRef = isB ? lastCalcParamsRefB : lastCalcParamsRef;
     const pTracerForces = isB ? tracerForcesB : tracerForces;
     const pTracerForces2 = isB ? tracerForces2B : tracerForces2;
+    const pAlptTable = isB ? alptTableB : alptTable;
     const pBaoRadiusPx = isB ? BAO_RADIUS_PX_B : BAO_RADIUS_PX;
     const pBaoRadiusMpc = isB ? BAO_RADIUS_MPC_B : BAO_RADIUS_MPC;
     const pCosmoMode = isB ? cosmoModeB : cosmoMode;
@@ -172,6 +177,21 @@ async function processPanelPhysicsAndRSD(opts) {
         const { offsets, velocities, gravityForces, prevGravForces, densities, smoothedDensities, crossingAccum } = pLD;
         const N = tracersPerPanel;
 
+        // ALPT: interpolate the precomputed table at the current growth
+        // factor. Falls back to the plain LPT base when no table is ready.
+        let alptDisp = null;
+        if (alptEnabled && pAlptTable && typeof sampleALPTDisplacement === 'function') {
+            if (!pLD.alptDisp || pLD.alptDisp.length !== N * 2) {
+                pLD.alptDisp = new Float32Array(N * 2);
+            }
+            sampleALPTDisplacement(pAlptTable, initialTracers, N, growthD, pLD.alptDisp);
+            // Optional small-scale gradient step, ramped as D^3.
+            if (alptLocalStep && typeof applyALPTLocalStep === 'function') {
+                applyALPTLocalStep(pAlptTable, growthD, pLD.alptDisp, N);
+            }
+            alptDisp = pLD.alptDisp;
+        }
+
         const gpuGravity = gpuGravityRef.current;
         const willUseGPU = useGPU && gpuGravity && gpuGravity.available;
         const gp = computeGridParams(N, SIM_W, SIM_H, 9);
@@ -198,7 +218,7 @@ async function processPanelPhysicsAndRSD(opts) {
         if (sculptActive && rulerRef.current.isSculpting && rulerRef.current.mouse && simulationTimeRef.current >= 0.99 && rulerRef.current.sculptPanel === panelIdx) {
             applySculpting(
                 rulerRef.current.mouse.x, rulerRef.current.mouse.y, 150,
-                N, initialTracers, pTracerForces, pTracerForces2, offsets, dispScale, disp2Scale, SIM_W, SIM_H
+                N, initialTracers, pTracerForces, pTracerForces2, offsets, dispScale, disp2Scale, SIM_W, SIM_H, alptDisp
             );
             pVoronoiDataRef.current = null;
         }
@@ -207,7 +227,7 @@ async function processPanelPhysicsAndRSD(opts) {
             N, initialTracers, pTracerForces, pTracerForces2, offsets, crossingAccum,
             dispScale, growthD, rawScale, densityFactor,
             SIM_W, SIM_H, physX, physY, cellSize, gridW, gridH, head, next,
-            useAdhesion
+            useAdhesion, alptDisp
         );
 
         if ((isPlaying || isRecordingRef.current) && (Date.now() % 50 < 20) && trailPercentage > 0) {

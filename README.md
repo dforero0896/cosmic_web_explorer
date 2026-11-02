@@ -81,6 +81,7 @@ Contributions, feature suggestions, and bug reports are highly welcome!
 * **Time Control:** Move backwards and forwards through cosmic history using the timeline slider (instantly computes 2LPT displacements, no local gravity), or hit "Play" for a more accurate evolution.
 * **Split-Screen Comparison:** Run two independent simulations side-by-side. Set different cosmological parameters for Panel A and Panel B while sharing the exact same random seed. Panel B syncs to Panel A's redshift ($z$) for direct visual comparisons of structure formation at the exact same stage of cosmic expansion.
 * **Redshift Space:** Switch between real space and redshift space to displace tracers along a selectable line of sight due to a doppler shift from their own motion, using modeled peculiar velocities. The strength of redshift space distortions (RSD) is adjustable for direct visual comparison of anisotropic clustering.
+* **ALPT Enhancement (optional):** Blend the 2LPT displacement with a spherical-collapse term on small scales, following the augmented-LPT idea of Kitaura & Heß (2013). A smoothing radius $r_s$ controls the 2LPT → spherical-collapse transition. The implementation uses a documented 2D analog of the published 3D model (see Science section). An extra small-scale step along the local density gradient can additionally be enabled, which nudges tracers towards local density maxima (see §2.4).
 
 ### Visualization Modes
 * **Tracers & Trails:** View the standard mass tracer distribution, and toggle **History** (past trajectories) or **Vector** (exaggerated current velocity) modes to visualize bulk flows.
@@ -150,6 +151,7 @@ cosmic_web_explorer/
 │   ├── cosmology.js          # Expansion history & growth factor LUTs
 │   ├── transfer-function.js  # Eisenstein & Hu P(k) transfer functions
 │   ├── pert2lpt.js           # 2LPT displacement via 2D FFT
+│   ├── pertalpt.js           # Augmented LPT: 2D collapse blend + gradient step
 │   ├── sim-physics.js        # Core Leapfrog KDK integration & Adhesion model
 │   ├── redshift-space.js     # Redshift-space LOS shifting & hybrid velocity logic
 │   ├── analysis-keys.js      # Shared cache key/signature helpers for analysis spaces
@@ -234,6 +236,40 @@ $$
 $$
 
 The source term is the determinant of the Hessian of the first-order potential. The 2LPT displacement is then the gradient of this potential: $\mathbf{\Psi}^{(2)} = - \nabla \phi^{(2)}$.
+
+#### 2.4 Augmented LPT (optional)
+
+The **ALPT** toggle blends the 2LPT displacement with a spherical-collapse (SC) displacement on small scales, following Kitaura & Heß (2013):
+
+$$
+\mathbf{\Psi}_{\rm ALPT}(\mathbf{q}) = K(\mathbf{q},r_s)\,\mathbf{\Psi}_{\rm 2LPT}(\mathbf{q}) + \left[1-K(\mathbf{q},r_s)\right]\mathbf{\Psi}_{\rm SC}(\mathbf{q}),
+\qquad K(\mathbf{q},r_s) = \exp\!\left(-\frac{|\mathbf{q}|^2}{2r_s^2}\right)
+$$
+
+The implementation intentionally departs from the published 3D model in three documented ways:
+
+* **2D collapse analog.** The visualization's density field is a 2D projection, so the SC stretching uses the $d=2$ dimensional continuation
+  $$\psi_{\rm SC,2D} = 2\left(\sqrt{1-\delta}-1\right), \qquad \psi_{\rm SC} \ge -2,$$
+  rather than the 3D Eq. (6) of Kitaura & Heß, $\psi_{\rm SC,3D} = 3(\sqrt{1-2\delta/3}-1)$ with $\psi \ge -3$. Both share the linear limit $\psi \approx -\delta$; the 2D form is a derived analog, **not** a published formula.
+* **Irrotational reconstruction.** The SC model specifies only the divergence $\psi_{\rm SC} = \nabla\cdot\mathbf{\Psi}_{\rm SC}$. We blend the divergences in Fourier space, solve one Poisson equation and take the gradient, so the reconstructed SC displacement is curl-free. This is a standard choice but an assumption not stated by the paper.
+* **Time dependence.** Published ALPT is a single-step $z=0$ model. Here the LPT fields grow with $D(t)$, so the SC term is evaluated at the current growth factor. A 13-sample table in $D$ is built once per parameter change and interpolated per frame; the $k=0$ mode is removed so the periodic box does not contract globally.
+
+$r_s$ is exposed in $h^{-1}\mathrm{Mpc}$. The paper's optimal 4–5 $h^{-1}\mathrm{Mpc}$ refers to 3D densities and is **not calibrated** for this projected 2D field — treat it as a visual scale. Enabling ALPT disables the text-imprint inversion, which assumes the pure 2LPT base displacement.
+
+#### 2.5 Local gradient step (optional)
+
+Inside the ALPT block there is a second, independent toggle ("Local gradient step"). When on, each tracer receives an extra displacement along the *local* density gradient, sharpening small-scale structure beyond what the Fourier-space collapse term can express:
+
+$$
+\mathbf{\Psi}_{\rm step}(\mathbf{q}) = \eta\,\hat{\nabla}\delta(\mathbf{q})\; s(\delta)\; \frac{|\nabla\delta|}{|\nabla\delta| + \epsilon},
+\qquad
+\mathbf{x}(t) = \mathbf{q} + D\mathbf{\Psi}^{(1)} + D^2\left(\mathbf{\Psi}^{(2)} + \mathbf{\Psi}_{\rm SC}\right) + D^3 \mathbf{\Psi}_{\rm step}
+$$
+
+The terms are evaluated once per ALPT table build, on a periodically blurred (2 passes) over-density grid deposited from the ALPT-evolved particles at the last growth-factor sample. $\hat{\nabla}\delta$ is the unit density gradient (periodic central differences), $s(\delta)$ is a smoothstep ramp in over-density over $[-0.5, 0.5]$ that switches the step off in voids and on inside structures, and the reliability factor $|\nabla\delta|/(|\nabla\delta|+\epsilon)$, with $\epsilon = 0.6\,\sigma_{|\nabla\delta|}$, damps the step on flat plateaus and ridges where the gradient is mostly noise. The step length $\eta$ is set by the slider in units of the mean tracer spacing $\bar d$, and the $D^3$ ramp ties the effect to structure growth rather than to the linear field. The step is a pure positional offset: it adds no velocity, hence no energy, and switching the toggle off reproduces exactly the plain ALPT field (verified to float32 precision).
+
+This step is adapted from the author's reference implementation (`js/cosmic-web.js`, `buildLocalStep`, in dforero0896.github.io) and is **not** a derived perturbation-theory term. It is not curl-free, so it does not preserve the linear density field, and it is applied only inside the ALPT pipeline.
+
 
 
 ### 3. Dynamics: Quasi-N-Body and Adhesion
