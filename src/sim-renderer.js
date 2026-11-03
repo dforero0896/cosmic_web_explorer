@@ -378,6 +378,121 @@ function drawVoidStats(ctx, voidResults, voidThreshold, minVoidRadius, pxPerMpc,
 }
 
 /**
+ * Draw the discrete colorbar legend for the 2D cosmic web classification.
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {object} data - result of computeWebClassification
+ * @param {object} opts - { dict, boxX, boxY, light }
+ */
+function drawWebColorbar(ctx, data, opts) {
+    const o = opts || {};
+    const d = o.dict || {};
+    const colors = (typeof WEB_CLASS_COLORS !== 'undefined') ? WEB_CLASS_COLORS : [[59, 130, 246], [245, 158, 11], [239, 68, 68]];
+    const labels = [d.webVoid || 'Void', d.webFilament || 'Filament', d.webKnot || 'Knot'];
+    const title = d.webClassLegend || 'Cosmic web';
+    const light = !!o.light;
+
+    const cellW = 92;
+    const cellH = 14;
+    const pad = 10;
+    const boxW = cellW * labels.length + pad * 2;
+    const boxH = 80;
+    // The sidebar overlays the left edge of the canvas when it is expanded;
+    // keep the legend clear of it, mirroring how drawScaleBar offsets.
+    const defaultX = o.isSidebarCollapsed === false ? 336 : 18;
+    const boxX = o.boxX === undefined ? defaultX : o.boxX;
+    const boxY = o.boxY === undefined ? 18 : o.boxY;
+
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+
+    ctx.fillStyle = light ? 'rgba(255,255,255,0.82)' : 'rgba(15,23,42,0.72)';
+    ctx.fillRect(boxX, boxY, boxW, boxH);
+    ctx.strokeStyle = light ? 'rgba(0,0,0,0.18)' : 'rgba(255,255,255,0.18)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(boxX + 0.5, boxY + 0.5, boxW - 1, boxH - 1);
+
+    ctx.fillStyle = light ? '#111827' : '#e2e8f0';
+    ctx.font = 'bold 13px "Inter", sans-serif';
+    ctx.fillText(title, boxX + boxW / 2, boxY + 18);
+
+    const barY = boxY + 24;
+    for (let i = 0; i < labels.length; i++) {
+        const c = colors[i];
+        const x = boxX + pad + i * cellW;
+        ctx.fillStyle = `rgb(${c[0]},${c[1]},${c[2]})`;
+        ctx.fillRect(x, barY, cellW, cellH);
+        ctx.strokeStyle = light ? 'rgba(0,0,0,0.25)' : 'rgba(0,0,0,0.35)';
+        ctx.strokeRect(x + 0.5, barY + 0.5, cellW - 1, cellH - 1);
+
+        ctx.fillStyle = light ? '#111827' : '#cbd5e1';
+        ctx.font = '12px "Inter", sans-serif';
+        ctx.fillText(labels[i], x + cellW / 2, barY + cellH + 16);
+    }
+
+    // Field / smoothing annotation so an exported still is self-describing.
+    const basisText = data.basis === 'delta' ? (d.webFieldDelta || 'density') : (d.webFieldPhi || 'potential');
+    const sub = `${basisText} · R=${(data.smoothingMpc || 0).toFixed(1)} ${d.mpcUnit || 'Mpc'}`;
+    ctx.fillStyle = light ? 'rgba(17,24,39,0.62)' : 'rgba(203,213,225,0.62)';
+    ctx.font = '11px "Inter", sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(sub, boxX + pad, boxY + boxH - 7);
+    ctx.restore();
+}
+
+/**
+ * Draw the 2D cosmic web classification as a translucent background layer.
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {object} data - result of computeWebClassification (cached across frames)
+ * @param {object} opts - { SIM_W, SIM_H, dict, light, showColorbar }
+ */
+function drawWebOverlay(ctx, data, opts) {
+    if (!data || !data.classes || !(data.gridN > 0)) return;
+    const o = opts || {};
+    const SIM_W = o.SIM_W || data.simW;
+    const SIM_H = o.SIM_H || data.simH;
+    const gridN = data.gridN;
+    const colors = (typeof WEB_CLASS_COLORS !== 'undefined') ? WEB_CLASS_COLORS : [[59, 130, 246], [245, 158, 11], [239, 68, 68]];
+    const alphas = (typeof WEB_CLASS_ALPHA !== 'undefined') ? WEB_CLASS_ALPHA : [0.32, 0.38, 0.48];
+
+    if (!data._canvas) {
+        const cv = document.createElement('canvas');
+        cv.width = gridN;
+        cv.height = gridN;
+        const c2 = cv.getContext('2d');
+        const img = c2.createImageData(gridN, gridN);
+        const px = img.data;
+        for (let i = 0; i < gridN * gridN; i++) {
+            const cls = data.classes[i];
+            const c = colors[cls] || colors[0];
+            const a = alphas[cls] === undefined ? 0.4 : alphas[cls];
+            px[4 * i] = c[0];
+            px[4 * i + 1] = c[1];
+            px[4 * i + 2] = c[2];
+            px[4 * i + 3] = Math.round(a * 255);
+        }
+        c2.putImageData(img, 0, 0);
+        data._canvas = cv;
+    }
+
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    if (ctx.globalCompositeOperation !== 'source-over') ctx.globalCompositeOperation = 'source-over';
+    ctx.drawImage(data._canvas, 0, 0, SIM_W, SIM_H);
+    ctx.restore();
+
+    if (o.showColorbar !== false) {
+        drawWebColorbar(ctx, data, {
+            dict: o.dict,
+            light: o.light,
+            isSidebarCollapsed: o.isSidebarCollapsed
+        });
+    }
+}
+
+/**
  * Draw comoving scale bar.
  */
 function drawScaleBar(ctx, pxPerMpc, SIM_H, isSidebarCollapsed, isB, dict) {

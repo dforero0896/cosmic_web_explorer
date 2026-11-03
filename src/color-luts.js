@@ -99,6 +99,19 @@ const COLORMAP_DEFINITIONS = {
 const DENSITY_COLORMAPS = ['classic', 'viridis', 'inferno', 'plasma', 'magma', 'turbo', 'cividis', 'coolwarm'];
 const GAS_COLORMAPS = ['thermal', 'viridis', 'inferno', 'plasma', 'magma', 'turbo', 'cividis', 'coolwarm'];
 
+// Every palette also gets a reversed variant ("<name>-rev"). Reversed means the
+// ramp runs from the palette's pale/bright end at low density down to its
+// saturated end at high density, so voids can sit on a light canvas while
+// over-dense knots stay coloured (see isColormapReversed / light background).
+const COLORMAP_REVERSED_SUFFIX = '-rev';
+
+Object.keys(COLORMAP_DEFINITIONS).forEach((name) => {
+    COLORMAP_DEFINITIONS[name + COLORMAP_REVERSED_SUFFIX] = {
+        label: COLORMAP_DEFINITIONS[name].label,
+        reverseOf: name
+    };
+});
+
 function clampByte(v) {
     return Math.min(255, Math.max(0, Math.round(v)));
 }
@@ -138,8 +151,29 @@ function sampleStops(stops, t) {
     ];
 }
 
+function buildReversedLUT(name, def) {
+    const base = getColormapLUT(def.reverseOf);
+    const rgb = new Float32Array(COLOR_LUT_SIZE * 3);
+    const ints = new Uint32Array(COLOR_LUT_SIZE);
+    const strings = new Array(COLOR_LUT_SIZE);
+    const last = COLOR_LUT_SIZE - 1;
+    for (let i = 0; i < COLOR_LUT_SIZE; i++) {
+        const src = last - i; // low density takes the palette's bright end
+        const r = clampByte(base.rgb[src * 3] * 255);
+        const g = clampByte(base.rgb[src * 3 + 1] * 255);
+        const b = clampByte(base.rgb[src * 3 + 2] * 255);
+        rgb[i * 3] = r / 255;
+        rgb[i * 3 + 1] = g / 255;
+        rgb[i * 3 + 2] = b / 255;
+        ints[i] = (255 << 24) | (b << 16) | (g << 8) | r;
+        strings[i] = `rgb(${r},${g},${b})`;
+    }
+    return { name, label: def.label, reversed: true, rgb, ints, strings };
+}
+
 function buildColormapLUT(name) {
     const def = COLORMAP_DEFINITIONS[name] || COLORMAP_DEFINITIONS.classic;
+    if (def.reverseOf) return buildReversedLUT(name, def);
     const rgb = new Float32Array(COLOR_LUT_SIZE * 3); // For WebGL
     const ints = new Uint32Array(COLOR_LUT_SIZE);
     const strings = new Array(COLOR_LUT_SIZE);
@@ -167,7 +201,16 @@ function getColormapLUT(name) {
 }
 
 function getColormapNames(kind) {
-    return (kind === 'gas' ? GAS_COLORMAPS : DENSITY_COLORMAPS).slice();
+    const base = (kind === 'gas' ? GAS_COLORMAPS : DENSITY_COLORMAPS);
+    return base.concat(base.map((name) => name + COLORMAP_REVERSED_SUFFIX));
+}
+
+function isColormapReversed(name) {
+    return typeof name === 'string' && name.slice(-COLORMAP_REVERSED_SUFFIX.length) === COLORMAP_REVERSED_SUFFIX;
+}
+
+function getColormapBaseName(name) {
+    return isColormapReversed(name) ? name.slice(0, -COLORMAP_REVERSED_SUFFIX.length) : name;
 }
 
 function getColormapLabel(name) {

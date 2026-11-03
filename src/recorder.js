@@ -253,10 +253,13 @@ window.SimulationRecorder = class SimulationRecorder {
     // Compositing (shared)
     // =================================================================
 
-    _composite(glCanvas, uiCanvas, hudInfo, glCanvasB, uiCanvasB, dividerWidth) {
+    _composite(glCanvas, uiCanvas, hudInfo, glCanvasB, uiCanvasB, dividerWidth, lightBackground) {
         const { width: w, height: h } = this;
         const ctx = this._compCtx;
         const isSplit = !!(glCanvasB && uiCanvasB);
+        // Reversed palettes render on a light "paper" canvas, so the composite
+        // backdrop and the watermark ink have to follow suit.
+        const light = !!lightBackground;
 
         // Helper: read WebGL canvas into a temp canvas (flips Y)
         const readGLCanvas = (glC) => {
@@ -282,7 +285,7 @@ window.SimulationRecorder = class SimulationRecorder {
             return this._tempCanvas;
         };
 
-        ctx.fillStyle = '#000';
+        ctx.fillStyle = light ? '#f3f1e9' : '#000';
         ctx.fillRect(0, 0, w, h);
 
         if (isSplit) {
@@ -295,7 +298,7 @@ window.SimulationRecorder = class SimulationRecorder {
             ctx.drawImage(uiCanvas, 0, 0, uiCanvas.width, uiCanvas.height, 0, 0, panelW, h);
 
             // Divider
-            ctx.fillStyle = 'rgba(255,255,255,0.35)';
+            ctx.fillStyle = light ? 'rgba(0,0,0,0.25)' : 'rgba(255,255,255,0.35)';
             ctx.fillRect(panelW, 0, dw, h);
 
             // Panel B — right half
@@ -370,8 +373,8 @@ window.SimulationRecorder = class SimulationRecorder {
         const linkBoxY = h - linkBoxH - 10;
         const linkRadius = Math.round(linkFontSize * 0.36);
 
-        // Draw semi-transparent box (0.75 alpha)
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+        // Draw semi-transparent box (0.75 alpha on dark, faint tint on paper)
+        ctx.fillStyle = light ? 'rgba(0, 0, 0, 0.05)' : 'rgba(0, 0, 0, 0.75)';
         ctx.beginPath();
         ctx.moveTo(linkBoxX + linkRadius, linkBoxY);
         ctx.arcTo(linkBoxX + linkBoxW, linkBoxY, linkBoxX + linkBoxW, linkBoxY + linkBoxH, linkRadius);
@@ -382,12 +385,12 @@ window.SimulationRecorder = class SimulationRecorder {
         ctx.fill();
 
         // Draw subtle border matching HUD style
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+        ctx.strokeStyle = light ? 'rgba(0, 0, 0, 0.18)' : 'rgba(255, 255, 255, 0.1)';
         ctx.lineWidth = 1;
         ctx.stroke();
 
         // Draw text
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+        ctx.fillStyle = light ? 'rgba(0, 0, 0, 0.7)' : 'rgba(255, 255, 255, 0.8)';
         ctx.fillText(linkText, w - 10 - linkPadX, linkBoxY + (linkBoxH / 2));
     }
 
@@ -395,11 +398,11 @@ window.SimulationRecorder = class SimulationRecorder {
     // Frame capture
     // =================================================================
 
-    async captureFrame(glCanvas, uiCanvas, hudInfo, glCanvasB, uiCanvasB, dividerWidth) {
+    async captureFrame(glCanvas, uiCanvas, hudInfo, glCanvasB, uiCanvasB, dividerWidth, lightBackground) {
         if (!this.active || !this._compCtx) return;
         this._frameCount++;
 
-        this._composite(glCanvas, uiCanvas, hudInfo, glCanvasB, uiCanvasB, dividerWidth);
+        this._composite(glCanvas, uiCanvas, hudInfo, glCanvasB, uiCanvasB, dividerWidth, lightBackground);
 
         if (this._useVideoEncoder) {
             await this._encoderCaptureFrame();

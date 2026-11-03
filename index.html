@@ -36,6 +36,7 @@ https://github.com/nicosmo/cosmic_web_explorer
     <script src="src/bao-forces.js"></script>
     <script src="src/pert2lpt.js"></script>
     <script src="src/pertalpt.js"></script>
+    <script src="src/web-classify.js"></script>
     <script src="src/transfer-function.js"></script>
     <script src="src/sim-physics.js"></script>
     <script src="src/redshift-space.js"></script>
@@ -592,6 +593,10 @@ https://github.com/nicosmo/cosmic_web_explorer
             const [trailMode, setTrailMode] = useState('history');
             const [showVoronoi, setShowVoronoi] = useState(false);
             const [showVoids, setShowVoids] = useState(false);
+            const [showWeb, setShowWeb] = useState(false);
+            const [webBasis, setWebBasis] = useState('phi');
+            const [webSmoothing, setWebSmoothing] = useState(6);
+            const [webThreshold, setWebThreshold] = useState(0);
             const [voidThreshold, setVoidThreshold] = useState(2.0);
             const [minVoidRadius, setMinVoidRadius] = useState(10);
             const [voidCenterMode, setVoidCenterMode] = useState('geometric');
@@ -633,6 +638,10 @@ https://github.com/nicosmo/cosmic_web_explorer
             const workerRef = useRef(null);
             const isWorkerBusy = useRef(false);
             const voronoiDataRef = useRef(null);
+            const webDataRef = useRef(null);
+            const webCalcRef = useRef({ t: 0 });
+            const webDataRefB = useRef(null);
+            const webCalcRefB = useRef({ t: 0 });
             const analysisSpaceKeyRef = useRef(buildAnalysisSpaceKey(spaceMode, rsdLos, rsdAmplitudeSettled));
 
             useEffect(() => {
@@ -1477,8 +1486,14 @@ https://github.com/nicosmo/cosmic_web_explorer
                     tempCanvas.height = SIM_H;
                     const tCtx = tempCanvas.getContext('2d');
 
-                    // Draw black background
-                    tCtx.fillStyle = '#000000';
+                    // Reversed palettes draw on a light canvas, so the exported frame
+                    // has to use the same paper backdrop instead of black.
+                    const exportLight = multiColormap
+                        ? isColormapReversed(showGas ? gasColormap : densityColormap)
+                        : false;
+
+                    // Draw backdrop
+                    tCtx.fillStyle = exportLight ? '#f3f1e9' : '#000000';
                     tCtx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
 
                     // Draw Panel A
@@ -1489,7 +1504,7 @@ https://github.com/nicosmo/cosmic_web_explorer
                     if (splitScreen && webglCanvasRefB.current && uiCanvasRefB.current) {
                         const bx = SIM_W + DIVIDER_WIDTH;
                         // Divider
-                        tCtx.fillStyle = 'rgba(255,255,255,0.35)';
+                        tCtx.fillStyle = exportLight ? 'rgba(0,0,0,0.25)' : 'rgba(255,255,255,0.35)';
                         tCtx.fillRect(SIM_W, 0, DIVIDER_WIDTH, SIM_H);
                         tCtx.drawImage(webglCanvasRefB.current, bx, 0);
                         tCtx.drawImage(uiCanvasRefB.current, bx, 0);
@@ -1535,7 +1550,7 @@ https://github.com/nicosmo/cosmic_web_explorer
                     const linkRadius = Math.round(linkFontSize * 0.36);
 
                     // Draw semi-transparent box
-                    tCtx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+                    tCtx.fillStyle = exportLight ? 'rgba(0, 0, 0, 0.05)' : 'rgba(0, 0, 0, 0.6)';
                     tCtx.beginPath();
                     tCtx.moveTo(linkBoxX + linkRadius, linkBoxY);
                     tCtx.arcTo(linkBoxX + linkBoxW, linkBoxY, linkBoxX + linkBoxW, linkBoxY + linkBoxH, linkRadius);
@@ -1546,12 +1561,12 @@ https://github.com/nicosmo/cosmic_web_explorer
                     tCtx.fill();
 
                     // Draw subtle border matching HUD
-                    tCtx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+                    tCtx.strokeStyle = exportLight ? 'rgba(0, 0, 0, 0.18)' : 'rgba(255, 255, 255, 0.1)';
                     tCtx.lineWidth = 1;
                     tCtx.stroke();
 
                     // Draw text
-                    tCtx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+                    tCtx.fillStyle = exportLight ? 'rgba(0, 0, 0, 0.7)' : 'rgba(255, 255, 255, 0.7)';
                     tCtx.fillText(linkText, tempCanvas.width - 20 - linkPadX, linkBoxY + (linkBoxH / 2));
 
                     const link = document.createElement('a');
@@ -1750,7 +1765,10 @@ https://github.com/nicosmo/cosmic_web_explorer
                     if (splitScreen && glB) glB.finish();
                     const glCanvasB = splitScreen ? webglCanvasRefB.current : null;
                     const uiCanvasB = splitScreen ? uiCanvasRefB.current : null;
-                    await rec.captureFrame(glCanvas, uiCanvas, getHudInfo(), glCanvasB, uiCanvasB, DIVIDER_WIDTH);
+                    const recLight = multiColormap
+                        ? isColormapReversed(showGas ? gasColormap : densityColormap)
+                        : false;
+                    await rec.captureFrame(glCanvas, uiCanvas, getHudInfo(), glCanvasB, uiCanvasB, DIVIDER_WIDTH, recLight);
                 };
 
                 try {
@@ -2206,9 +2224,23 @@ https://github.com/nicosmo/cosmic_web_explorer
                         rsdEnabled
                     } = panelState;
 
+                    const pWebDataRef = isB ? webDataRefB : webDataRef;
+                    const pWebCalcRef = isB ? webCalcRefB : webCalcRef;
+
                     // --- DRAWING: Clear this panel's canvases ---
+                    // Reversed palettes run bright -> saturated, so the active view gets
+                    // a light "paper" canvas instead of black. Declared here because the
+                    // clear colour is applied before the buffers are filled below.
+                    const activePaletteName = multiColormap
+                        ? (showGas ? gasColormap : densityColormap)
+                        : (showGas ? 'thermal' : 'classic');
+                    const lightBackground = isColormapReversed(activePaletteName);
                     gl.viewport(0, 0, cWidth, cHeight);
-                    gl.clearColor(0, 0, 0, 1);
+                    if (lightBackground) {
+                        gl.clearColor(0.953, 0.945, 0.914, 1); // warm paper (#f3f1e9)
+                    } else {
+                        gl.clearColor(0, 0, 0, 1);
+                    }
                     gl.clear(gl.COLOR_BUFFER_BIT);
                     ctx.clearRect(0, 0, cWidth, cHeight);
 
@@ -2253,8 +2285,10 @@ https://github.com/nicosmo/cosmic_web_explorer
                         // Density coloring always uses 3x3 (9 cells) for consistency
                         const meanDensity = colorMeanDensity;
                         // Select the active palettes (defaults preserve the original look)
-                        const activeDensityLUT = getDensityLUT(multiColormap ? densityColormap : 'classic');
-                        const activeGasLUT = getGasLUT(multiColormap ? gasColormap : 'thermal');
+                        const activeDensityName = multiColormap ? densityColormap : 'classic';
+                        const activeGasName = multiColormap ? gasColormap : 'thermal';
+                        const activeDensityLUT = getDensityLUT(activeDensityName);
+                        const activeGasLUT = getGasLUT(activeGasName);
 
                         const simW = SIM_W | 0;
                         const simH = SIM_H | 0;
@@ -2361,7 +2395,13 @@ https://github.com/nicosmo/cosmic_web_explorer
                         // DRAW PASS 1
                         if (showGas) {
                             gl.enable(gl.BLEND);
-                            gl.blendFunc(gl.SRC_ALPHA, gl.ONE); // Screen/Additive-ish blend
+                            if (lightBackground) {
+                                // Additive blending only works on black; on a light canvas use
+                                // normal alpha compositing so gas keeps its palette colour.
+                                gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+                            } else {
+                                gl.blendFunc(gl.SRC_ALPHA, gl.ONE); // Screen/Additive-ish blend
+                            }
                         } else {
                             gl.disable(gl.BLEND);
                         }
@@ -2373,6 +2413,39 @@ https://github.com/nicosmo/cosmic_web_explorer
 
                     // --- DRAWING: UI LAYER (Layer 1 - Canvas 2D) ---
                     ctx.save(); // for composite ops
+
+                    // --- 2D COSMIC WEB CLASSIFICATION (T-web) OVERLAY ---
+                    // Hessian-eigenvalue classification of either the potential
+                    // (phi) or the overdensity (delta); see src/web-classify.js.
+                    if (showWeb && analysisX) {
+                        const webKey = `${webBasis}|${webSmoothing}|${webThreshold}|` +
+                            `${currentZ.toFixed(5)}|` +
+                            buildAnalysisSpaceKey(spaceMode, rsdLos, rsdAmplitudeSettled);
+                        const nowMs = (typeof performance !== 'undefined' && performance.now)
+                            ? performance.now() : Date.now();
+                        const throttleMs = isPlaying ? 350 : 0;
+                        const cachedWeb = pWebDataRef.current;
+                        if ((!cachedWeb || cachedWeb.key !== webKey) &&
+                            (nowMs - pWebCalcRef.current.t) >= throttleMs) {
+                            pWebCalcRef.current.t = nowMs;
+                            try {
+                                const webResult = computeWebClassification(
+                                    analysisX, analysisY, tracersPerPanel, SIM_W, SIM_H, pxPerMpc,
+                                    { basis: webBasis, smoothingMpc: webSmoothing, threshold: webThreshold, gridN: 256 }
+                                );
+                                webResult.key = webKey;
+                                pWebDataRef.current = webResult;
+                            } catch (webErr) {
+                                console.error('Web classification failed', webErr);
+                            }
+                        }
+                        if (pWebDataRef.current) {
+                            drawWebOverlay(ctx, pWebDataRef.current, {
+                                SIM_W, SIM_H, dict: i18n[lang], light: lightBackground,
+                                isSidebarCollapsed
+                            });
+                        }
+                    }
 
                     // --- VORONOI / VOID RENDERING (VIA WORKER) ---
                     const rsdAnalysisKey = buildAnalysisSpaceKey(spaceMode, rsdLos, rsdAmplitudeSettled);
@@ -2511,13 +2584,17 @@ https://github.com/nicosmo/cosmic_web_explorer
                     cancelled = true;
                     cancelAnimationFrame(animationFrameId);
                 };
-            }, [isPlaying, simDeltaT, omegaM, omegaL, w0, wa, showTracers, showGas, showDensity, showInitialOverlay, rulerActive, sculptActive, trailPercentage, trailMode, initialTracers, centers, tracerForces, tracerForcesB, tracerForces2, tracerForces2B, canvasSize, enableLocalGravity, numCircles, boxSizeMpc, BAO_RADIUS_MPC, BAO_RADIUS_MPC_B, BAO_RADIUS_PX_B, tracersPerPanel, isSidebarCollapsed, renderTrigger, cosmologyLUT, showCorrelation, showVoidProfile, showDensityPDF, showVoronoi, showVoids, voidThreshold, minVoidRadius, voidCenterMode, profileMode, splitScreen, omegaMB, omegaLB, w0B, waB, cosmologyLUTB, cosmoMode, cosmoModeB, initMode, spaceMode, rsdLos, rsdAmplitude, rsdAmplitudeSettled, multiColormap, densityColormap, gasColormap, alptEnabled, alptTable, alptTableB, alptLocalStep]);
+            }, [isPlaying, simDeltaT, omegaM, omegaL, w0, wa, showTracers, showGas, showDensity, showInitialOverlay, rulerActive, sculptActive, trailPercentage, trailMode, initialTracers, centers, tracerForces, tracerForcesB, tracerForces2, tracerForces2B, canvasSize, enableLocalGravity, numCircles, boxSizeMpc, BAO_RADIUS_MPC, BAO_RADIUS_MPC_B, BAO_RADIUS_PX_B, tracersPerPanel, isSidebarCollapsed, renderTrigger, cosmologyLUT, showCorrelation, showVoidProfile, showDensityPDF, showVoronoi, showVoids, voidThreshold, minVoidRadius, voidCenterMode, profileMode, splitScreen, omegaMB, omegaLB, w0B, waB, cosmologyLUTB, cosmoMode, cosmoModeB, initMode, spaceMode, rsdLos, rsdAmplitude, rsdAmplitudeSettled, multiColormap, densityColormap, gasColormap, alptEnabled, alptTable, alptTableB, alptLocalStep, showWeb, webBasis, webSmoothing, webThreshold]);
 
             // Localized names for the two original palettes; the rest are proper nouns.
             const colormapLabel = (name) => {
-                if (name === 'classic') return i18n[lang].cmClassic;
-                if (name === 'thermal') return i18n[lang].cmThermal;
-                return getColormapLabel(name);
+                const reversed = isColormapReversed(name);
+                const base = getColormapBaseName(name);
+                let label;
+                if (base === 'classic') label = i18n[lang].cmClassic;
+                else if (base === 'thermal') label = i18n[lang].cmThermal;
+                else label = getColormapLabel(base);
+                return reversed ? `${label} (${i18n[lang].cmReversed})` : label;
             };
 
             return (
@@ -3261,6 +3338,83 @@ https://github.com/nicosmo/cosmic_web_explorer
                                                     <Wind size={14}/> {i18n[lang].thermal}
                                                 </button>
                                             </TooltipWrapper>
+                                        </div>
+
+                                        <div className="mt-2 pt-2 border-t border-white/5 space-y-2">
+                                            <div className="flex items-center justify-between">
+                                                <TooltipWrapper text={i18n[lang].ttWebClass}>
+                                                    <label htmlFor="web-classify-toggle" className="text-xs font-bold text-slate-400 uppercase tracking-widest cursor-pointer">{i18n[lang].webClass}</label>
+                                                </TooltipWrapper>
+                                                <label className="toggle-switch scale-75 origin-right">
+                                                    <input
+                                                        id="web-classify-toggle"
+                                                        type="checkbox"
+                                                        checked={showWeb}
+                                                        onChange={(e) => setShowWeb(e.target.checked)}
+                                                        aria-label={i18n[lang].webClass}
+                                                    />
+                                                    <span className="slider"></span>
+                                                </label>
+                                            </div>
+                                            {showWeb && (
+                                                <div className="space-y-2 animate-in fade-in duration-200">
+                                                    <div className="grid grid-cols-2 gap-1">
+                                                        <button
+                                                            onClick={() => setWebBasis('phi')}
+                                                            className={`py-1.5 rounded text-xs ${webBasis === 'phi' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+                                                        >{i18n[lang].webFieldPhi}</button>
+                                                        <button
+                                                            onClick={() => setWebBasis('delta')}
+                                                            className={`py-1.5 rounded text-xs ${webBasis === 'delta' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+                                                        >{i18n[lang].webFieldDelta}</button>
+                                                    </div>
+                                                    <TooltipWrapper text={i18n[lang].ttWebSmoothing}>
+                                                        <div className="space-y-1 w-full">
+                                                            <div className="flex justify-between text-xs">
+                                                                <span className="text-slate-400">{i18n[lang].webSmoothing}</span>
+                                                                <span className="text-slate-200">{webSmoothing.toFixed(1)} {i18n[lang].mpcUnit}</span>
+                                                            </div>
+                                                            <input
+                                                                type="range" min="0.5" max="10" step="0.5"
+                                                                value={webSmoothing}
+                                                                onChange={(e) => setWebSmoothing(parseFloat(e.target.value))}
+                                                                aria-label={i18n[lang].webSmoothing}
+                                                                className="w-full accent-indigo-500"
+                                                            />
+                                                        </div>
+                                                    </TooltipWrapper>
+                                                    <TooltipWrapper text={i18n[lang].ttWebThreshold}>
+                                                        <div className="space-y-1 w-full">
+                                                            <div className="flex justify-between text-xs">
+                                                                <span className="text-slate-400">{i18n[lang].webThreshold}</span>
+                                                                <span className="text-slate-200">{webThreshold.toFixed(1)}σ</span>
+                                                            </div>
+                                                            <input
+                                                                type="range" min="-2" max="2" step="0.1"
+                                                                value={webThreshold}
+                                                                onChange={(e) => setWebThreshold(parseFloat(e.target.value))}
+                                                                aria-label={i18n[lang].webThreshold}
+                                                                className="w-full accent-indigo-500"
+                                                            />
+                                                        </div>
+                                                    </TooltipWrapper>
+                                                    <div className="flex items-center gap-3 pt-1">
+                                                        <div className="flex items-center gap-1">
+                                                            <span className="w-2.5 h-2.5 rounded-sm bg-blue-500"></span>
+                                                            <span className="text-[10px] text-slate-400">{i18n[lang].webVoid}</span>
+                                                        </div>
+                                                        <div className="flex items-center gap-1">
+                                                            <span className="w-2.5 h-2.5 rounded-sm bg-amber-500"></span>
+                                                            <span className="text-[10px] text-slate-400">{i18n[lang].webFilament}</span>
+                                                        </div>
+                                                        <div className="flex items-center gap-1">
+                                                            <span className="w-2.5 h-2.5 rounded-sm bg-red-500"></span>
+                                                            <span className="text-[10px] text-slate-400">{i18n[lang].webKnot}</span>
+                                                        </div>
+                                                    </div>
+                                                    <p className="text-[10px] text-slate-500 leading-snug">{i18n[lang].webHint}</p>
+                                                </div>
+                                            )}
                                         </div>
 
                                         <div className="mt-2 pt-2 border-t border-white/5 space-y-2">

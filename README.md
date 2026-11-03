@@ -86,6 +86,7 @@ Contributions, feature suggestions, and bug reports are highly welcome!
 ### Visualization Modes
 * **Tracers & Trails:** View the standard mass tracer distribution, and toggle **History** (past trajectories) or **Vector** (exaggerated current velocity) modes to visualize bulk flows.
 * **Thermal (Gas) View:** Approximates gas heating in collapsed structures using additive radial gradients. Colors map to local density ($\text{Blue} \to \text{Cyan} \to \text{White} \to \text{Gold}$), showing gas heating as it falls into clusters.
+* **Color Palettes:** A **Multiple Colormaps** switch in *View & Tools* replaces the fixed density/thermal look with a choice of eight palettes (Classic, Viridis, Inferno, Plasma, Magma, Turbo, Cividis, Cool–Warm) for the density tracers and the thermal gas independently, each with a live gradient preview. Every palette also ships a **reversed** variant (e.g. *Viridis (reversed)*): the density map runs bright $\to$ saturated on a light paper canvas so galaxies read as coloured ink, and the thermal view switches from additive blending (only valid on black) to ordinary alpha compositing. Screenshots and recordings inherit the light backdrop and switch the watermark to dark ink. Note that reversal is a literal LUT flip, so palettes whose mid-range is bright (Classic) keep lower contrast against paper.
 * **Initial Conditions Overlay:** Highlight the original $z=10$ Lagrangian grid positions to trace bulk flows from their origin.
 * **Custom Image Overlay:** Upload an external image (such as galaxy survey data or images from reference simulations) to compare directly against the evolving cosmic web. Includes dedicated sliders to finely adjust opacity, scale, and X/Y positioning for alignment.
 
@@ -96,6 +97,7 @@ Contributions, feature suggestions, and bug reports are highly welcome!
 * **Power Spectrum $P(k)$:** In realistic IC mode, extracts the 2D power spectrum from the evolved density field. Features exact non-power-of-2 grid evaluation (Bluestein's FFT) and interlacing ([Sefusatti et al. 2016](https://ui.adsabs.harvard.edu/abs/2016MNRAS.460.3624S/abstract)).
 * **2-Point Correlation:** In BAO mode, evaluates the cross-correlation $\xi(r)$ of tracers around known BAO seeds.
 * **Density Distribution:** A real-time normalized histogram of the tracer density contrast ($\delta = \rho/\bar{\rho} - 1$), tracking the shift from linear Gaussian fluctuations to a skewed non-linear distribution.
+* **Cosmic Web Classification:** A 2D T-web classifier (Hessian of the smoothed density or gravitational potential) paints every pixel as knot, filament or void, with an on-canvas colorbar legend. Field, smoothing scale and threshold are adjustable live.
 * **Ruler:** Measure comoving distances (Mpc, assuming $h = 0.674$) directly on the web. *(Interaction: Click to start, click to end, double-click near the start to clear).*
 
 ### Interactivity & High-Quality Export
@@ -160,6 +162,7 @@ cosmic_web_explorer/
 │   ├── bao-forces.js         # Sculpted BAO initialization logic
 │   ├── gpu-gravity.js        # WebGPU N-body compute shader
 │   ├── gpu-correlation.js    # WebGPU pair-counting compute shader
+│   ├── web-classify.js       # 2D T-web cosmic web classification (knot/filament/void)
 │   ├── sim-renderer.js       # Canvas2D drawing logic for overlays & charts
 │   ├── webgl-utils.js        # WebGL rendering for tracers & gas
 │   ├── color-luts.js         # Color maps for density/temperature
@@ -360,7 +363,19 @@ Real-time void identification is offloaded to a background Web Worker. The engin
 * **Additional Merging:** Small voids ($R < R_{min}$) can be iteratively absorbed into their largest neighboring void. All topological calculations respect periodic boundaries using a wrapped "ghost particle" buffer.
 
 
-### 6. Display-Time Thermal Scatter
+### 6. Cosmic Web Classification (2D T-web)
+
+The overlay classifies every grid cell from the eigenvalue structure of the tidal tensor, following the standard T-web prescription ([Hahn et al. 2007](https://ui.adsabs.harvard.edu/abs/2007MNRAS.375..489H/abstract), [Forero-Romero et al. 2009](https://ui.adsabs.harvard.edu/abs/2009MNRAS.396.1819F/abstract)) as implemented in the 3D `webjax` reference (`cwc.py`), reduced to two dimensions.
+
+* **Field construction.** Tracer positions are assigned to a periodic grid ($N_g = 2^n$, 64--512; default 256) with CIC deposition to get $\delta = \rho/\bar{\rho} - 1$, then Gaussian-smoothed in Fourier space with $\exp(-k^2 R^2/2)$. By default the *evolution* (analysis-space) positions are used, so the overlay is not distorted by redshift-space displacements.
+* **Potential or density basis.** With the potential basis $\hat{\phi} = -\hat{\delta}/k^2$; with the density basis $\hat{f} = -\hat{\delta}$, i.e. the sign is flipped so that in both cases *positive* eigenvalues mean collapse along that axis. The two bases give the same classification topology (they differ by the $k^4$ weighting of the spectrum), which the unit tests confirm to machine precision on analytic single-mode fields.
+* **Hessian and eigenvalues.** The Hessian $f_{ij}$ is evaluated with periodic central differences in physical units ($\mathrm{Mpc}/h$) and diagonalised analytically, $\lambda_{1,2} = \tfrac{f_{xx}+f_{yy}}{2} \pm \sqrt{(\tfrac{f_{xx}-f_{yy}}{2})^2 + f_{xy}^2}$ with $\lambda_1 \geq \lambda_2$.
+* **Classification.** The threshold is expressed in units of the dispersion, $\nu = \text{threshold} \cdot \sigma(\lambda_1)$, and a "ridge fix" band $\pm 0.1\sigma$ suppresses noise-driven misclassification at the boundary. Cells with $\lambda_2 \geq \nu$ are **knots** (two collapsed axes), $\lambda_1 \geq \nu > \lambda_2$ are **filaments** (one collapsed axis) and the rest are **voids**.
+* **2D vs. 3D.** The 2D reduction has three classes, not four: the 3D *sheet* class (exactly one collapsed axis) is the filament analogue and is not separately identifiable here. The smoothing scale is in $h^{-1}\mathrm{Mpc}$ and should exceed the mean tracer separation; the default ($R = 6\ h^{-1}\mathrm{Mpc}$) is a compromise between the noise level of a finite tracer set and the definition of the web.
+
+The classification costs roughly 10--40 ms at $256^2$ and is cached, recomputing only when the field, smoothing, threshold, redshift or analysis-space key changes (throttled to ~350 ms while the simulation is playing). Colors are semi-transparent so the tracers remain visible; the same discrete legend is drawn on the canvas so it survives screenshots and recordings.
+
+### 7. Display-Time Thermal Scatter
 
 To represent the sub-grid velocity dispersion (virialization) of dark matter halos without the computational cost of true high-resolution N-body orbits, the engine applies a physically-modulated cosmetic offset at render time. The scatter amplitude is driven by five factors:
 
