@@ -1,3 +1,5 @@
+🇬🇧 [English](../README.md) | 🇩🇪 [Deutsch](README-de.md) | 🇪🇸 [Español](README-es.md)
+
 # Cosmic Web Explorer
 
 

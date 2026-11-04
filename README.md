@@ -1,4 +1,4 @@
-🇬🇧 [English](README.md) | 🇩🇪 [Deutsch](docs/README-de.md)
+🇬🇧 [English](README.md) | 🇩🇪 [Deutsch](docs/README-de.md) | 🇪🇸 [Español](docs/README-es.md)
 
 # Cosmic Web Explorer
 
@@ -81,7 +81,7 @@ Contributions, feature suggestions, and bug reports are highly welcome!
 * **Time Control:** Move backwards and forwards through cosmic history using the timeline slider (instantly computes 2LPT displacements, no local gravity), or hit "Play" for a more accurate evolution.
 * **Split-Screen Comparison:** Run two independent simulations side-by-side. Set different cosmological parameters for Panel A and Panel B while sharing the exact same random seed. Panel B syncs to Panel A's redshift ($z$) for direct visual comparisons of structure formation at the exact same stage of cosmic expansion.
 * **Redshift Space:** Switch between real space and redshift space to displace tracers along a selectable line of sight due to a doppler shift from their own motion, using modeled peculiar velocities. The strength of redshift space distortions (RSD) is adjustable for direct visual comparison of anisotropic clustering.
-* **ALPT Enhancement (optional):** Blend the 2LPT displacement with a spherical-collapse term on small scales, following the augmented-LPT idea of Kitaura & Heß (2013). A smoothing radius $r_s$ controls the 2LPT → spherical-collapse transition. The implementation uses a documented 2D analog of the published 3D model (see Science section). An extra small-scale step along the local density gradient can additionally be enabled, which nudges tracers towards local density maxima (see §2.4).
+* **ALPT Enhancement (optional):** Blend the 2LPT displacement with a spherical-collapse term on small scales, following the augmented-LPT idea of Kitaura & Heß (2013). A smoothing radius $r_s$ controls the 2LPT → spherical-collapse transition. The implementation uses a documented 2D analog of the published 3D model (see Science section). An extra small-scale step along the local density gradient can additionally be enabled, which nudges tracers towards local density maxima (see §2.4–2.5).
 
 ### Visualization Modes
 * **Tracers & Trails:** View the standard mass tracer distribution, and toggle **History** (past trajectories) or **Vector** (exaggerated current velocity) modes to visualize bulk flows.
